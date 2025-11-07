@@ -15,6 +15,7 @@ modelArtifacts:
   name: "openai/gpt-oss-120b"
   labels:
     llm-d.ai/inference-serving: "true"
+    llm-d.ai/inferenceServing: "true"  # CamelCase version for InferencePool selector
     llm-d.ai/guide: "pd-disaggregation"
     llm-d.ai/hardware-variant: "gpu"
     llm-d.ai/accelerator-vendor: "nvidia"
@@ -23,15 +24,21 @@ modelArtifacts:
 routing:
   servicePort: 8000
   proxy:
-    image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.6.0
+    image: quay.io/rh_ee_rsaini/llm-d-routing-sidecar:dev
     connector: nixlv2
     secure: false
+    # NOTE: routing-proxy uses klog (not zap), so we need to pass klog flags
+    # Remove zapLogLevel and use args to pass -v directly
+    args:
+      - "-v=5"  # klog verbosity level (5 = most verbose for debugging)
 
 decode:
   parallelism:
     tensor: 4
   create: true
   replicas: 1
+  nodeSelector:
+    gpu.nvidia.com/model: "H200"
   monitoring:
     podmonitor:
       enabled: true
@@ -40,21 +47,44 @@ decode:
       interval: "30s"
   containers:
     - name: "vllm"
-      image: ghcr.io/llm-d/llm-d-cuda:v0.5.1
+      image: ghcr.io/llm-d/llm-d-cuda-dev:latest
       modelCommand: vllmServe
       args:
         - "--block-size"
         - "128"
         - "--kv-transfer-config"
-        - '{"kv_connector":"NixlConnector", "kv_role":"kv_both"}'
+        - '{"kv_connector":"NixlConnector", "kv_role":"kv_both", "kv_load_failure_policy":"fail"}'
+        - "--kv-events-config"
+        - |-
+          {
+            "enable_kv_cache_events": true,
+            "publisher": "zmq",
+            "endpoint": "tcp://gaie-$(GAIE_RELEASE_NAME_POSTFIX)-epp.$(NAMESPACE).svc.cluster.local:5557",
+            "topic": "kv@$(POD_IP)@openai/gpt-oss-120b"
+          }
         - "--disable-uvicorn-access-log"
         - "--max-model-len"
-        - "32000"
+        - "4096"
       env:
+        - name: GAIE_RELEASE_NAME_POSTFIX
+          value: "pd"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
         - name: VLLM_NIXL_SIDE_CHANNEL_HOST
           valueFrom:
             fieldRef:
               fieldPath: status.podIP
+        - name: VLLM_LOGGING_LEVEL
+          value: DEBUG  # Most verbose standard level for vLLM
+        - name: UCX_LOG_LEVEL
+          value: DEBUG
       ports:
         - containerPort: 8200
           name: vllm
@@ -117,7 +147,9 @@ prefill:
   parallelism:
     tensor: 1
   create: true
-  replicas: 4
+  replicas: 2
+  nodeSelector:
+    gpu.nvidia.com/model: "H200"
   monitoring:
     podmonitor:
       enabled: true
@@ -126,21 +158,46 @@ prefill:
       interval: "30s"
   containers:
     - name: "vllm"
-      image: ghcr.io/llm-d/llm-d-cuda:v0.5.1
+      image: ghcr.io/llm-d/llm-d-cuda-dev:latest
       modelCommand: vllmServe
       args:
         - "--block-size"
         - "128"
         - "--kv-transfer-config"
-        - '{"kv_connector":"NixlConnector", "kv_role":"kv_both"}'
+        - '{"kv_connector":"NixlConnector", "kv_role":"kv_both", "kv_load_failure_policy":"fail"}'
+        - "--kv-events-config"
+        - |-
+          {
+            "enable_kv_cache_events": true,
+            "publisher": "zmq",
+            "endpoint": "tcp://gaie-$(GAIE_RELEASE_NAME_POSTFIX)-epp.$(NAMESPACE).svc.cluster.local:5557",
+            "topic": "kv@$(POD_IP)@openai/gpt-oss-120b"
+          }
         - "--disable-uvicorn-access-log"
         - "--max-model-len"
-        - "32000"
+        - "4096"
+        - "--gpu-memory-utilization"
+        - "0.95"
       env:
+        - name: GAIE_RELEASE_NAME_POSTFIX
+          value: "pd"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
         - name: VLLM_NIXL_SIDE_CHANNEL_HOST
           valueFrom:
             fieldRef:
               fieldPath: status.podIP
+        - name: VLLM_LOGGING_LEVEL
+          value: DEBUG  # Most verbose standard level for vLLM
+        - name: UCX_LOG_LEVEL
+          value: DEBUG
       ports:
         - containerPort: 8000
           name: vllm
