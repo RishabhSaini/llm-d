@@ -36,7 +36,7 @@ decode:
   parallelism:
     tensor: 4
   create: true
-  replicas: 1
+  replicas: 2
   nodeSelector:
     gpu.nvidia.com/model: "H200"
   monitoring:
