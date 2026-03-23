@@ -6,8 +6,8 @@ inferenceExtension:
     # both downstream infernece-scheduler and upstream epp images can support precise KV Cache awareness based on the configurations here
     ###################
     name: llm-d-inference-scheduler
-    hub: ghcr.io/llm-d
-    tag: v0.6.0
+    hub: quay.io/rh_ee_rsaini
+    tag: slo-pd-experimental
     ###################
     # name: epp
     # hub: registry.k8s.io/gateway-api-inference-extension
@@ -66,7 +66,12 @@ inferenceExtension:
     precise-prefix-cache-config.yaml: |
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
+      featureGates:
+        - prepareDataPlugins
       plugins:
+        - type: tokenizer
+          parameters:
+            modelName: Qwen/Qwen3-32B
         - type: single-profile-handler
         - type: precise-prefix-cache-scorer
           parameters:
