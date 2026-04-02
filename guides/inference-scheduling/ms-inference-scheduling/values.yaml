@@ -33,7 +33,7 @@ decode:
   parallelism:
     tensor: 2
     data: 1
-  replicas: 8
+  replicas: 1
   monitoring:
     podmonitor:
       enabled: true

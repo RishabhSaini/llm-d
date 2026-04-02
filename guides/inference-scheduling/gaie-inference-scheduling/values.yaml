@@ -5,8 +5,8 @@ inferenceExtension:
     # both downstream infernece-scheduler and upstream epp image can support inference-scheduling example
     ###################
     name: llm-d-inference-scheduler
-    hub: ghcr.io/llm-d
-    tag: v0.6.0
+    hub: quay.io/rh_ee_rsaini
+    tag: odhFC
     ###################
     # name: epp
     # hub: registry.k8s.io/gateway-api-inference-extension
@@ -14,7 +14,50 @@ inferenceExtension:
     ###################
     pullPolicy: Always
   extProcPort: 9002
-  pluginsConfigFile: "default-plugins.yaml"
+  pluginsConfigFile: "slo-flow-control-plugins.yaml"
+  pluginsCustomConfig:
+    slo-flow-control-plugins.yaml: |
+      apiVersion: inference.networking.x-k8s.io/v1alpha1
+      kind: EndpointPickerConfig
+      plugins:
+      - type: queue-scorer
+      - type: kv-cache-utilization-scorer
+      - type: prefix-cache-scorer
+      - type: metrics-data-source
+        parameters:
+          scheme: "http"
+          path: "/metrics"
+          insecureSkipVerify: true
+      - type: core-metrics-extractor
+      - type: slo-deadline-ordering-policy
+      - type: round-robin-fairness-policy
+      schedulingProfiles:
+      - name: default
+        plugins:
+        - pluginRef: queue-scorer
+          weight: 2
+        - pluginRef: kv-cache-utilization-scorer
+          weight: 2
+        - pluginRef: prefix-cache-scorer
+          weight: 3
+      saturationDetector:
+        queueDepthThreshold: 1
+        kvCacheUtilThreshold: 0.05
+      featureGates:
+      - flowControl
+      flowControl:
+        maxBytes: "1Gi"
+        defaultRequestTTL: 1m
+        priorityBands:
+        - priority: 10
+          orderingPolicyRef: slo-deadline-ordering-policy
+          fairnessPolicyRef: round-robin-fairness-policy
+        - priority: 5
+          orderingPolicyRef: slo-deadline-ordering-policy
+          fairnessPolicyRef: round-robin-fairness-policy
+        - priority: 1
+          orderingPolicyRef: slo-deadline-ordering-policy
+          fairnessPolicyRef: round-robin-fairness-policy
   # Distributed tracing configuration (OpenTelemetry)
   tracing:
     enabled: false
