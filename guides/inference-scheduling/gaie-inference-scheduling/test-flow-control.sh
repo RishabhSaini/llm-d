@@ -251,12 +251,23 @@ for band in tight medium relaxed; do
 done
 
 echo ""
-echo "First 10 Dispatched (by absolute first-token time):"
-printf "%-5s %-15s %-10s %-12s %-12s\n" "RANK" "SLO_BAND" "SLO(ms)" "TTFT(ms)" "TPOT(ms)"
-echo "------------------------------------------------------"
+echo "Dispatch Order (by absolute first-token time):"
+printf "%-15s %-7s %-12s %-12s %-12s\n" "SLO_BAND" "COUNT" "AVG_RANK" "FIRST_RANK" "LAST_RANK"
+echo "--------------------------------------------------------------"
 
-tail -n +2 "${RESULTS_DIR}/results.csv" | grep -v ",-1," | sort -t, -k8 -n | head -10 | \
-    awk -F, '{printf "%-5d %-15s %-10s %-12s %-12s\n", NR, $1, $3, $4, $5}'
+# Sort all results by absolute first-token timestamp and assign ranks
+sorted_with_ranks=$(tail -n +2 "${RESULTS_DIR}/results.csv" | grep -v ",-1," | sort -t, -k8 -n | \
+    awk -F, '{print NR","$0}')
+
+for band in tight medium relaxed; do
+    band_ranks=$(echo "${sorted_with_ranks}" | grep ",${band}," | cut -d, -f1)
+    band_count=$(echo "${band_ranks}" | grep -c '[0-9]' || true)
+    [[ "${band_count}" -eq 0 ]] && continue
+    avg_rank=$(echo "${band_ranks}" | awk '{s+=$1} END {printf "%.1f", s/NR}')
+    first_rank=$(echo "${band_ranks}" | head -1)
+    last_rank=$(echo "${band_ranks}" | tail -1)
+    printf "%-15s %-7s %-12s %-12s %-12s\n" "${band}" "${band_count}" "${avg_rank}" "${first_rank}" "${last_rank}"
+done
 
 echo ""
 echo "============================================================"
