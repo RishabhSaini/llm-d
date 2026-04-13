@@ -4,6 +4,10 @@
 # All requests use the same objective but different x-slo-ttft-ms values.
 # Requests with tighter SLOs should get lower TTFT under contention.
 #
+# Strategy: Pre-saturate the system with long-running requests, VERIFY
+# saturation is detected by the EPP via Prometheus, THEN send test requests
+# in a staggered stream so they queue behind the saturation barrier.
+#
 # Usage: ./test-flow-control.sh [NAMESPACE] [GATEWAY_SVC]
 
 set -uo pipefail
@@ -13,20 +17,22 @@ GATEWAY_SVC="${2:-infra-inference-scheduling-inference-gateway-istio}"
 EPP_SVC="gaie-inference-scheduling-epp"
 MODEL="Qwen/Qwen3-32B"
 
-# All requests use the same objective (critical, priority=10)
-# but with different SLO targets
 OBJECTIVE="critical"
-N_TIGHT=40     # slo=5000ms  (tight deadline, should be served first)
-N_MEDIUM=80    # slo=30000ms (medium deadline)
-N_RELAXED=200  # slo=120000ms (relaxed deadline, should be served last)
+N_TIGHT=40     # slo=5000ms
+N_MEDIUM=80    # slo=30000ms
+N_RELAXED=200  # slo=120000ms
+
+# Stagger interval: delay between each test request (ms)
+STAGGER_MS=50
 
 RESULTS_DIR="/tmp/fc-test-$(date +%s)"
 mkdir -p "${RESULTS_DIR}/traces"
 
-echo "=== Flow Control Priority Test (Streaming + Prometheus) ==="
+echo "=== Flow Control Priority Test (Staggered + Saturation Verified) ==="
 echo "Namespace:  ${NAMESPACE}"
 echo "Gateway:    ${GATEWAY_SVC}"
 echo "Model:      ${MODEL}"
+echo "Stagger:    ${STAGGER_MS}ms between requests"
 echo "Results:    ${RESULTS_DIR}"
 echo ""
 
@@ -39,11 +45,13 @@ PF_EPP_PID=$!
 
 cleanup() {
     kill "${PF_GW_PID}" "${PF_EPP_PID}" 2>/dev/null || true
-    wait "${PF_GW_PID}" "${PF_EPP_PID}" 2>/dev/null || true
+    for pid in "${WARMUP_PIDS[@]:-}"; do
+        kill "${pid}" 2>/dev/null || true
+    done
+    wait 2>/dev/null || true
 }
 trap cleanup EXIT
 
-# Wait for port-forwards to be ready
 echo "Waiting for port-forwards..."
 for attempt in $(seq 1 10); do
     if curl -s -o /dev/null --max-time 1 http://localhost:8080/ 2>/dev/null; then
@@ -67,6 +75,56 @@ fetch_metrics() {
     fi
 }
 
+get_pool_saturation() {
+    fetch_metrics | grep "^inference_extension_flow_control_pool_saturation{" | awk '{print $NF}' || echo "0"
+}
+
+# --- Phase 0: Warmup — saturate the system with LONG requests ---
+# Use max_tokens=2000 so these requests keep vLLM busy for a long time.
+# Send enough to fill KV cache above the 5% threshold.
+N_WARMUP=150
+WARMUP_PIDS=()
+
+echo "Phase 0: Sending ${N_WARMUP} long warmup requests (max_tokens=2000)..."
+for i in $(seq 1 "${N_WARMUP}"); do
+    rand_id=$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 20)
+    curl -s -N -X POST "${URL}" \
+        -H "Content-Type: application/json" \
+        -H "x-gateway-inference-objective: ${OBJECTIVE}" \
+        -H "x-slo-ttft-ms: 120000" \
+        -d "{\"model\":\"${MODEL}\",\"prompt\":\"[${rand_id}] Write an extremely detailed and comprehensive history of every major scientific discovery from ancient Greece through the modern era, covering physics, chemistry, biology, astronomy, and mathematics in exhaustive detail with dates and names.\",\"max_tokens\":2000,\"temperature\":0.7,\"stream\":true}" \
+        --max-time 300 > /dev/null 2>&1 &
+    WARMUP_PIDS+=($!)
+    # Small stagger to avoid overwhelming envoy
+    if (( i % 20 == 0 )); then
+        sleep 0.2
+    fi
+done
+
+# --- Phase 1: Wait for EPP to detect saturation ---
+echo "Phase 1: Waiting for EPP to detect pool saturation..."
+MAX_WAIT=60
+WAIT_START=$(date +%s)
+SATURATION="0"
+while true; do
+    SATURATION=$(get_pool_saturation)
+    ELAPSED=$(( $(date +%s) - WAIT_START ))
+
+    if awk "BEGIN {exit (${SATURATION} >= 1.0) ? 0 : 1}" 2>/dev/null; then
+        echo "  Saturation detected: ${SATURATION} (after ${ELAPSED}s)"
+        break
+    fi
+
+    if (( ELAPSED >= MAX_WAIT )); then
+        echo "  WARNING: Saturation not detected after ${MAX_WAIT}s (current: ${SATURATION})"
+        echo "  Proceeding anyway — results may not show SLO ordering."
+        break
+    fi
+
+    printf "  Waiting... saturation=%s elapsed=%ds\r" "${SATURATION}" "${ELAPSED}"
+    sleep 1
+done
+
 # --- Snapshot metrics before test ---
 echo "Snapshotting pre-test metrics..."
 fetch_metrics > "${RESULTS_DIR}/metrics_before.txt"
@@ -79,7 +137,6 @@ send_streaming_request() {
     local slo_label="$4"
     local trace_file="${RESULTS_DIR}/traces/${slo_label}_${id}.txt"
 
-    # Randomize prompt to defeat prefix cache and KV cache reuse
     local rand_id
     rand_id=$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 20)
     local body
@@ -92,8 +149,6 @@ EOF
     start_ns=$(date +%s%N)
     echo "START ${start_ns}" > "${trace_file}"
 
-    # Stream curl output, timestamp each token-bearing SSE chunk.
-    # Only bash builtins + one date call per chunk for minimal overhead.
     curl -s -N \
         -X POST "${URL}" \
         -H "Content-Type: application/json" \
@@ -108,7 +163,6 @@ EOF
         echo "$(date +%s%N)"
     done >> "${trace_file}"
 
-    # Post-process trace file to compute TTFT/TPOT
     local timestamps
     timestamps=$(tail -n +2 "${trace_file}")
     local token_count
@@ -137,50 +191,47 @@ EOF
 
 echo "slo_label,id,slo_ttft_ms,ttft_ms,tpot_ms,tokens,total_ms,first_token_epoch_ms" > "${RESULTS_DIR}/results.csv"
 
-N_WARMUP=100
-WARMUP_PIDS=()
+# --- Phase 2: Send test requests in a STAGGERED, INTERLEAVED stream ---
+# Mix tight/medium/relaxed randomly so arrival order != SLO order.
+# The flow controller should reorder them by SLO deadline.
+echo ""
+echo "Phase 2: Sending test requests (staggered, interleaved)..."
+echo "  ${N_TIGHT} tight (slo=5s), ${N_MEDIUM} medium (slo=30s), ${N_RELAXED} relaxed (slo=120s)"
 
-# Phase 0: Warmup — saturate the system so the EPP detects backpressure
-# These use relaxed SLOs and are not measured; they just fill the pipeline
-echo "Warming up with ${N_WARMUP} requests to saturate the system..."
-for i in $(seq 1 "${N_WARMUP}"); do
-    rand_id=$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 20)
-    curl -s -N -X POST "${URL}" \
-        -H "Content-Type: application/json" \
-        -H "x-gateway-inference-objective: ${OBJECTIVE}" \
-        -H "x-slo-ttft-ms: 30000" \
-        -d "{\"model\":\"${MODEL}\",\"prompt\":\"[${rand_id}] Describe the complete history of every programming language ever created in exhaustive detail.\",\"max_tokens\":500,\"temperature\":0.7,\"stream\":true}" \
-        --max-time 120 > /dev/null 2>&1 &
-    WARMUP_PIDS+=($!)
-done
-
-# Wait for metrics to reflect saturation (EPP scrapes every 50ms)
-echo "Waiting for saturation to be detected..."
-sleep 3
-
-REQUEST_PIDS=()
-
-# Now send the actual test requests — system is already saturated
-# SLO ordering should now be visible since requests will queue at the EPP
-echo "Sending all requests concurrently: ${N_TIGHT} tight (slo=5s), ${N_MEDIUM} medium (slo=30s), ${N_RELAXED} relaxed (slo=120s)"
-echo "All using objective=${OBJECTIVE}"
-
+# Build a shuffled list of all requests
+REQUEST_LIST=()
 for i in $(seq 1 "${N_TIGHT}"); do
-    send_streaming_request "${OBJECTIVE}" 5000 "req-${i}" "tight" &
-    REQUEST_PIDS+=($!)
+    REQUEST_LIST+=("tight,5000,tight-${i}")
 done
 for i in $(seq 1 "${N_MEDIUM}"); do
-    send_streaming_request "${OBJECTIVE}" 30000 "req-${i}" "medium" &
-    REQUEST_PIDS+=($!)
+    REQUEST_LIST+=("medium,30000,medium-${i}")
 done
 for i in $(seq 1 "${N_RELAXED}"); do
-    send_streaming_request "${OBJECTIVE}" 120000 "req-${i}" "relaxed" &
-    REQUEST_PIDS+=($!)
+    REQUEST_LIST+=("relaxed,120000,relaxed-${i}")
 done
 
-echo "Waiting for ${#REQUEST_PIDS[@]} requests..."
+# Shuffle
+SHUFFLED=($(printf '%s\n' "${REQUEST_LIST[@]}" | shuf))
 
-# Sample model server metrics mid-test to check actual saturation
+REQUEST_PIDS=()
+TOTAL=${#SHUFFLED[@]}
+SENT=0
+
+for entry in "${SHUFFLED[@]}"; do
+    IFS=',' read -r slo_label slo_ttft req_id <<< "${entry}"
+    send_streaming_request "${OBJECTIVE}" "${slo_ttft}" "${req_id}" "${slo_label}" &
+    REQUEST_PIDS+=($!)
+    SENT=$((SENT + 1))
+
+    # Stagger: sleep between requests
+    if (( SENT % 10 == 0 )); then
+        printf "  Sent %d/%d requests\r" "${SENT}" "${TOTAL}"
+    fi
+    sleep "$(awk "BEGIN {print ${STAGGER_MS}/1000.0}")"
+done
+echo "  Sent ${TOTAL}/${TOTAL} requests — waiting for completion..."
+
+# Sample model server metrics mid-test
 (
     sleep 5
     echo "" >> "${RESULTS_DIR}/midtest_vllm_metrics.txt"
@@ -194,11 +245,20 @@ echo "Waiting for ${#REQUEST_PIDS[@]} requests..."
     done
 ) &
 
+# Sample saturation during test
+(
+    for s in $(seq 1 10); do
+        sleep 2
+        sat=$(get_pool_saturation)
+        echo "t+${s}: saturation=${sat}" >> "${RESULTS_DIR}/saturation_samples.txt"
+    done
+) &
+
 for pid in "${REQUEST_PIDS[@]}"; do
     wait "${pid}" 2>/dev/null || true
 done
 
-# Kill warmup requests — they served their purpose
+# Kill warmup requests
 for pid in "${WARMUP_PIDS[@]}"; do
     kill "${pid}" 2>/dev/null || true
 done
@@ -234,10 +294,8 @@ for band in tight medium relaxed; do
     avg_tpot=$(echo "${tpots}" | awk '{s+=$1} END {printf "%.0f", s/NR}')
     avg_total=$(echo "${totals}" | awk '{s+=$1} END {printf "%.0f", s/NR}')
 
-    # P50: ceil(n/2), P99: ceil(n*0.99)
     p50_idx=$(( (count + 1) / 2 ))
     p99_idx=$(( (count * 99 + 99) / 100 ))
-    # Clamp p99 to count (for small sample sizes)
     [[ "${p99_idx}" -gt "${count}" ]] && p99_idx="${count}"
 
     p50_ttft=$(echo "${ttfts}" | sed -n "${p50_idx}p")
@@ -255,7 +313,6 @@ echo "Dispatch Order (by absolute first-token time):"
 printf "%-15s %-7s %-12s %-12s %-12s\n" "SLO_BAND" "COUNT" "AVG_RANK" "FIRST_RANK" "LAST_RANK"
 echo "--------------------------------------------------------------"
 
-# Sort all results by absolute first-token timestamp and assign ranks
 sorted_with_ranks=$(tail -n +2 "${RESULTS_DIR}/results.csv" | grep -v ",-1," | sort -t, -k8 -n | \
     awk -F, '{print NR","$0}')
 
@@ -274,7 +331,6 @@ echo "============================================================"
 echo "                  EPP PROMETHEUS METRICS"
 echo "============================================================"
 
-# --- Flow Control: Queue Duration by Priority (THE KEY METRIC) ---
 echo ""
 echo "Queue Duration (this run only):"
 sum_after=$(grep -E "flow_control_request_queue_duration_seconds_sum\{" \
@@ -296,9 +352,13 @@ else
 fi
 
 echo ""
-echo "Pool Saturation:"
+echo "Pool Saturation (final):"
 grep "^inference_extension_flow_control_pool_saturation{" \
     "${RESULTS_DIR}/metrics_after.txt" | awk '{printf "  %s\n", $NF}' || echo "  (no data)"
+
+echo ""
+echo "Pool Saturation (sampled during test):"
+cat "${RESULTS_DIR}/saturation_samples.txt" 2>/dev/null | sed 's/^/  /' || echo "  (not available)"
 
 echo ""
 echo "Model Server Metrics (sampled mid-test):"

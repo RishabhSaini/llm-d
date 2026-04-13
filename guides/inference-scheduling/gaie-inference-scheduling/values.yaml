@@ -6,7 +6,7 @@ inferenceExtension:
     ###################
     name: llm-d-inference-scheduler
     hub: quay.io/rh_ee_rsaini
-    tag: odhFC
+    tag: odhFC-3.4Patched
     ###################
     # name: epp
     # hub: registry.k8s.io/gateway-api-inference-extension
@@ -28,7 +28,7 @@ inferenceExtension:
           scheme: "http"
           path: "/metrics"
           insecureSkipVerify: true
-      - type: core-metrics-extractor
+      - type: model-server-protocol-metrics
       - type: slo-deadline-ordering-policy
       - type: round-robin-fairness-policy
       schedulingProfiles:
@@ -46,17 +46,17 @@ inferenceExtension:
       featureGates:
       - flowControl
       flowControl:
-        maxBytes: "1Gi"
+        maxBytes: 1073741824
         defaultRequestTTL: 1m
         priorityBands:
         - priority: 10
-          orderingPolicyRef: slo-deadline-ordering-policy
+          orderingPolicyRef: fcfs-ordering-policy
           fairnessPolicyRef: round-robin-fairness-policy
         - priority: 5
-          orderingPolicyRef: slo-deadline-ordering-policy
+          orderingPolicyRef: fcfs-ordering-policy
           fairnessPolicyRef: round-robin-fairness-policy
         - priority: 1
-          orderingPolicyRef: slo-deadline-ordering-policy
+          orderingPolicyRef: fcfs-ordering-policy
           fairnessPolicyRef: round-robin-fairness-policy
   # Distributed tracing configuration (OpenTelemetry)
   tracing:
