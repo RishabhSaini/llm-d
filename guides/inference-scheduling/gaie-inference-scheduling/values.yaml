@@ -2,16 +2,9 @@ inferenceExtension:
   replicas: 1
   flags:
   image:
-    # both downstream infernece-scheduler and upstream epp image can support inference-scheduling example
-    ###################
     name: llm-d-inference-scheduler
     hub: quay.io/rh_ee_rsaini
-    tag: odhFC-3.4Patched
-    ###################
-    # name: epp
-    # hub: registry.k8s.io/gateway-api-inference-extension
-    # tag: v1.4.0
-    ###################
+    tag: fcBench
     pullPolicy: Always
   extProcPort: 9002
   pluginsConfigFile: "slo-flow-control-plugins.yaml"
@@ -29,7 +22,6 @@ inferenceExtension:
           path: "/metrics"
           insecureSkipVerify: true
       - type: model-server-protocol-metrics
-      - type: slo-deadline-ordering-policy
       - type: round-robin-fairness-policy
       schedulingProfiles:
       - name: default
@@ -41,21 +33,21 @@ inferenceExtension:
         - pluginRef: prefix-cache-scorer
           weight: 3
       saturationDetector:
-        queueDepthThreshold: 1
-        kvCacheUtilThreshold: 0.05
+        queueDepthThreshold: 3
+        kvCacheUtilThreshold: 0.8
       featureGates:
       - flowControl
       flowControl:
         maxBytes: 1073741824
         defaultRequestTTL: 1m
         priorityBands:
-        - priority: 10
-          orderingPolicyRef: fcfs-ordering-policy
-          fairnessPolicyRef: round-robin-fairness-policy
-        - priority: 5
-          orderingPolicyRef: fcfs-ordering-policy
-          fairnessPolicyRef: round-robin-fairness-policy
         - priority: 1
+          orderingPolicyRef: fcfs-ordering-policy
+          fairnessPolicyRef: round-robin-fairness-policy
+        - priority: 0
+          orderingPolicyRef: fcfs-ordering-policy
+          fairnessPolicyRef: round-robin-fairness-policy
+        - priority: -1
           orderingPolicyRef: fcfs-ordering-policy
           fairnessPolicyRef: round-robin-fairness-policy
   # Distributed tracing configuration (OpenTelemetry)

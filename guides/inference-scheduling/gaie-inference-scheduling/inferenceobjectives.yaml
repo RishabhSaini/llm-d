@@ -1,9 +1,9 @@
 apiVersion: inference.networking.x-k8s.io/v1alpha2
 kind: InferenceObjective
 metadata:
-  name: critical
+  name: premium
 spec:
-  priority: 10
+  priority: 1
   poolRef:
     group: inference.networking.k8s.io
     name: gaie-inference-scheduling
@@ -13,7 +13,7 @@ kind: InferenceObjective
 metadata:
   name: standard
 spec:
-  priority: 5
+  priority: 0
   poolRef:
     group: inference.networking.k8s.io
     name: gaie-inference-scheduling
@@ -21,9 +21,9 @@ spec:
 apiVersion: inference.networking.x-k8s.io/v1alpha2
 kind: InferenceObjective
 metadata:
-  name: best-effort
+  name: batch
 spec:
-  priority: 1
+  priority: -1
   poolRef:
     group: inference.networking.k8s.io
     name: gaie-inference-scheduling
