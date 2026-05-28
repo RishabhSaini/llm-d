@@ -14,11 +14,19 @@ router:
       optimized-baseline-plugins.yaml: |
         apiVersion: llm-d.ai/v1alpha1
         kind: EndpointPickerConfig
+        featureGates:
+        - flowControl
         plugins:
         - type: queue-scorer
         - type: kv-cache-utilization-scorer
         - type: prefix-cache-scorer
         - type: no-hit-lru-scorer
+        - type: round-robin-fairness-policy
+        - type: fcfs-ordering-policy
+        - type: utilization-detector
+          parameters:
+            queueDepthThreshold: 3
+            kvCacheUtilThreshold: 0.8
         schedulingProfiles:
         - name: default
           plugins:
@@ -30,6 +38,18 @@ router:
             weight: 3
           - pluginRef: no-hit-lru-scorer
             weight: 2
+        saturationDetector:
+          pluginRef: utilization-detector
+        flowControl:
+          enableEviction: true
+          evictionCooldown: 100ms
+          maxRequests: "1k"
+          defaultRequestTTL: "60s"
+          priorityBands:
+          - priority: 0
+            maxRequests: "500"
+            fairnessPolicyRef: round-robin-fairness-policy
+            orderingPolicyRef: fcfs-ordering-policy
 
   modelServers:
     matchLabels:

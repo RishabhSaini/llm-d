@@ -1,0 +1,19 @@
+apiVersion: llm-d.ai/v1alpha2
+kind: InferenceObjective
+metadata:
+  name: sheddable-test
+spec:
+  priority: -1
+  poolRef:
+    group: inference.networking.k8s.io
+    name: optimized-baseline
+---
+apiVersion: llm-d.ai/v1alpha2
+kind: InferenceObjective
+metadata:
+  name: normal-test
+spec:
+  priority: 1
+  poolRef:
+    group: inference.networking.k8s.io
+    name: optimized-baseline

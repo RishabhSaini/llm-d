@@ -5,9 +5,9 @@ router:
   epp:
     replicas: 1
     image:
-      registry: ghcr.io/llm-d
-      repository: llm-d-router-endpoint-picker-dev
-      tag: main
+      registry: quay.io/rh_ee_rsaini
+      repository: llm-d-router-endpoint-picker
+      tag: evictWiring
     flags:
       v: 2
     pluginsConfigFile: "default-plugins.yaml"
