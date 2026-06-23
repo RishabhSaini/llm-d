@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: talker
+  labels:
+    llm-d.ai/role: talker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qwen3-tts
+      llm-d.ai/role: talker
+  template:
+    metadata:
+      labels:
+        app: qwen3-tts
+        llm-d.ai/role: talker
+        llm-d.ai/inference-serving: "true"
+        llm-d.ai/guide: "disagg-omni-serving"
+    spec:
+      containers:
+        - name: modelserver
+          image: quay.io/rh_ee_rsaini/llm-d-omni-cuda:latest
+          command: ["vllm", "serve"]
+          args:
+            - "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+            - "--omni"
+            - "--standalone"
+            - "--stage-id=0"
+            - "--port=8000"
+            - "--trust-remote-code"
+          ports:
+            - containerPort: 8000
+              name: modelserver
+              protocol: TCP
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: llm-d-hf-token
+                  key: HF_TOKEN
+                  optional: true
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              memory: 16Gi
+            requests:
+              nvidia.com/gpu: "1"
+              cpu: "4"
+              memory: 16Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: modelserver
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: modelserver
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3

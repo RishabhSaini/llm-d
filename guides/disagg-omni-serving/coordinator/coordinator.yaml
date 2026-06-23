@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coordinator-tts-config
+data:
+  coordinator-tts.yaml: |
+    log_level: 2
+    server:
+      listen_addr: ":8080"
+      read_timeout: 30s
+      write_timeout: 300s
+    gateway:
+      # For standalone mode: "http://disagg-omni-serving-epp"
+      # For gateway mode: "http://llm-d-inference-gateway"
+      address: "http://llm-d-inference-gateway"
+      timeout: 120s
+    pipeline:
+      steps:
+        - type: talker
+        - type: code2wav
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coordinator
+  labels:
+    llm-d.ai/guide: "disagg-omni-serving"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coordinator
+      llm-d.ai/guide: "disagg-omni-serving"
+  template:
+    metadata:
+      labels:
+        app: coordinator
+        llm-d.ai/guide: "disagg-omni-serving"
+    spec:
+      containers:
+        - name: coordinator
+          image: quay.io/rh_ee_rsaini/llm-d-coordinator:latest
+          args:
+            - "--config=/etc/coordinator/coordinator-tts.yaml"
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/coordinator
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: coordinator-tts-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coordinator
+spec:
+  selector:
+    app: coordinator
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP

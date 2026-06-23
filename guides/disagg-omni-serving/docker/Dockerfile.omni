@@ -1,0 +1,31 @@
+# llm-d vllm-omni image with standalone stage support
+#
+# Build:
+#   docker build -f docker/Dockerfile.omni \
+#     --build-arg VLLM_OMNI_REPO=https://github.com/RishabhSaini/vllm-omni.git \
+#     --build-arg VLLM_OMNI_BRANCH=standalone-stage-mode \
+#     -t quay.io/rh_ee_rsaini/llm-d-omni-cuda:latest .
+#
+# Or with upstream vllm-omni (once --standalone lands):
+#   docker build -f docker/Dockerfile.omni \
+#     -t quay.io/rh_ee_rsaini/llm-d-omni-cuda:latest .
+
+ARG BASE_IMAGE=vllm/vllm-openai:v0.23.0
+FROM ${BASE_IMAGE}
+
+ARG VLLM_OMNI_REPO=https://github.com/vllm-project/vllm-omni.git
+ARG VLLM_OMNI_BRANCH=main
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch ${VLLM_OMNI_BRANCH} ${VLLM_OMNI_REPO} /app/vllm-omni && \
+    cd /app/vllm-omni && \
+    uv pip install --python "$(python3 -c 'import sys; print(sys.executable)')" --no-cache-dir "." && \
+    rm -rf /app/vllm-omni/.git
+
+ENTRYPOINT []
