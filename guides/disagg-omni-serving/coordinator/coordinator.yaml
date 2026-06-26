@@ -10,9 +10,7 @@ data:
       read_timeout: 30s
       write_timeout: 300s
     gateway:
-      # For standalone mode: "http://disagg-omni-serving-epp"
-      # For gateway mode: "http://llm-d-inference-gateway"
-      address: "http://llm-d-inference-gateway"
+      address: "http://llm-d-inference-gateway-istio"
       timeout: 120s
     pipeline:
       steps:
