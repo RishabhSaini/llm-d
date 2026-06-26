@@ -8,17 +8,26 @@ router:
       protocol: TCP
       targetPort: 8081
 
+  monitoring:
+    prometheus:
+      auth:
+        enabled: false
+
   epp:
     pluginsConfigFile: "optimized-baseline-plugins.yaml"
     pluginsCustomConfig:
       optimized-baseline-plugins.yaml: |
         apiVersion: llm-d.ai/v1alpha1
         kind: EndpointPickerConfig
+        featureGates:
+        - flowControl
         plugins:
         - type: queue-scorer
         - type: kv-cache-utilization-scorer
         - type: prefix-cache-scorer
         - type: no-hit-lru-scorer
+        flowControl:
+          defaultRequestTTL: 30s
         schedulingProfiles:
         - name: default
           plugins:
