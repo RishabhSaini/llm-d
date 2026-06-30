@@ -14,6 +14,12 @@ router:
         enabled: false
 
   epp:
+    env:
+      - name: HF_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: llm-d-hf-token
+            key: HF_TOKEN
     pluginsConfigFile: "optimized-baseline-plugins.yaml"
     pluginsCustomConfig:
       optimized-baseline-plugins.yaml: |
@@ -22,18 +28,61 @@ router:
         featureGates:
         - flowControl
         plugins:
-        - type: queue-scorer
-        - type: kv-cache-utilization-scorer
+        - type: token-producer
+          parameters:
+            modelName: Qwen/Qwen3-32B
+            vllm:
+              url: "http://render:8000"
+        - type: endpoint-notification-source
+        - type: precise-prefix-cache-producer
+          parameters:
+            tokenProcessorConfig:
+              blockSize: 64
+            speculativeIndexing: true
+            indexerConfig:
+              kvBlockIndexConfig:
+                enableMetrics: true
+            kvEventsConfig:
+              topicFilter: "kv@"
+              concurrency: 8
+              discoverPods: true
+              podDiscoveryConfig:
+                socketPort: 5556
         - type: prefix-cache-scorer
+          parameters:
+            prefixMatchInfoProducerName: precise-prefix-cache-producer
+        - type: kv-cache-utilization-scorer
+        - type: queue-scorer
         - type: no-hit-lru-scorer
+          parameters:
+            prefixMatchInfoProducerName: precise-prefix-cache-producer
+        - name: concurrency-detector
+          type: concurrency-detector
+          parameters:
+            concurrencyMode: "tokens"
+            maxTokenConcurrency: 200
+            headroom: 0
+        - name: inflight-load-producer
+          type: inflight-load-producer
+          parameters:
+            addEstimatedOutputTokens: true
+            outputRatio: 1.5
+            prefixMatchInfoProducerName: "precise-prefix-cache-producer"
+        dataLayer:
+          sources:
+          - pluginRef: endpoint-notification-source
+            extractors:
+            - pluginRef: precise-prefix-cache-producer
         flowControl:
           defaultRequestTTL: 30s
+          saturationDetector:
+            pluginRef: concurrency-detector
         schedulingProfiles:
         - name: default
           plugins:
-          - pluginRef: queue-scorer
-            weight: 2
           - pluginRef: kv-cache-utilization-scorer
+            weight: 2
+          - pluginRef: queue-scorer
             weight: 2
           - pluginRef: prefix-cache-scorer
             weight: 3

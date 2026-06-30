@@ -15,26 +15,29 @@ spec:
             - "--disable-access-log-for-endpoints=/health,/metrics,/v1/models"
             - "--tensor-parallel-size=2"
             - "--max-num-seqs=2"
-            # Uncomment for distributed tracing
-            # - "--otlp-traces-endpoint=http://otel-collector:4317"
-            # - "--collect-detailed-traces=all"
+            - "--block-size=64"
+            - "--kv-events-config"
+            - '{"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"$(KV_EVENTS_ENDPOINT)","topic":"kv@$(POD_IP):$(POD_PORT)@Qwen/Qwen3-32B"}'
+          ports:
+            - containerPort: 5556
+              name: kv-events
+              protocol: TCP
           env:
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: llm-d-hf-token
                   key: HF_TOKEN
-            # # Uncomment for distributed tracing env vars
-            # - name: OTEL_SERVICE_NAME
-            #   value: "vllm-decode"
-            # - name: OTEL_EXPORTER_OTLP_ENDPOINT
-            #   value: "http://otel-collector:4317"
-            # - name: OTEL_TRACES_EXPORTER
-            #   value: "otlp"
-            # - name: OTEL_TRACES_SAMPLER
-            #   value: "parentbased_traceidratio"
-            # - name: OTEL_TRACES_SAMPLER_ARG
-            #   value: "0.1"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_PORT
+              value: "8000"
+            - name: KV_EVENTS_ENDPOINT
+              value: "tcp://*:5556"
+            - name: DO_NOT_TRACK
+              value: "1"
           resources:
             limits:
               cpu: '16'
