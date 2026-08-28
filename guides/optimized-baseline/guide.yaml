@@ -17,7 +17,7 @@ env:
 
     PROVIDER_NAME: {default: none, values: [none, gke, agentgateway, istio]}
     ACCELERATOR_TYPE: {default: gpu, values: [gpu, amd, xpu, hpu, "tpu/v6", "tpu/v7", cpu]}
-    MODEL_SERVER: {default: vllm, values: [vllm, sglang, trtllm]}
+    MODEL_SERVER: {default: vllm, values: [vllm, vllm-omni, sglang, trtllm]}
     INFRA_PROVIDER: {default: base, values: [base, gke]}
 
     MODEL: {default: "Qwen/Qwen3-32B"}
@@ -60,7 +60,7 @@ deploy:
         # Paths to values files
         export ROUTER_BASE_VALUES="${REPO_ROOT}/guides/recipes/router/base.values.yaml"
 
-    - when: {MODEL_SERVER: [vllm, sglang]}
+    - when: {MODEL_SERVER: [vllm, vllm-omni, sglang]}
       run: export ROUTER_VALUES="${REPO_ROOT}/guides/${GUIDE_NAME}/router/${GUIDE_NAME}.values.yaml"
 
     - when: {MODEL_SERVER: [trtllm]}

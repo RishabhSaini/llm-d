@@ -29,6 +29,9 @@ Both plugins are used with their built-in defaults — no per-deployment tuning 
 | GPUs per replica   | 2                                                       | 1                                                                 |
 | Total GPUs         | 16                                                      | 16                                                                |
 
+> [!NOTE]
+> For omni-modality models (text, image, audio, video), use `MODEL_SERVER=vllm-omni` which deploys [vLLM-Omni](https://github.com/vllm-project/vllm-omni). The default model is [Qwen/Qwen3-Omni-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct).
+
 ### Supported Hardware Backends
 
 This guide includes configurations for the following accelerators:
@@ -83,7 +86,7 @@ export HF_TOKEN=HF_TOKEN_PLACEHOLDER
 export MONITORING_VALUES=
 export PROVIDER_NAME=none # options: none, gke, agentgateway, istio
 export ACCELERATOR_TYPE=gpu # options: gpu, amd, xpu, hpu, tpu/v6, tpu/v7, cpu
-export MODEL_SERVER=vllm # options: vllm, sglang, trtllm
+export MODEL_SERVER=vllm # options: vllm, vllm-omni, sglang, trtllm
 export INFRA_PROVIDER=base # options: base, gke
 export MODEL=Qwen/Qwen3-32B
 export CURL_TEST_IMAGE=cfmanteiga/alpine-bash-curl-jq:latest
@@ -277,6 +280,26 @@ For example to deploy other models:
 # NVIDIA GPU / vLLM — openai/gpt-oss-120b
 kubectl apply -n ${NAMESPACE} -k ${REPO_ROOT}/guides/${GUIDE_NAME}/modelserver/gpu/vllm/gpt-oss/
 ```
+
+</details>
+
+<details>
+<summary><h4>Omni-Modality Models (vLLM-Omni)</h4></summary>
+
+To deploy omni-modality models that support text, image, audio, and video inputs/outputs:
+
+```bash
+export MODEL_SERVER=vllm-omni
+export MODEL=Qwen/Qwen3-Omni-30B-A3B-Instruct
+
+# NVIDIA GPU / vLLM-Omni
+kubectl apply -n ${NAMESPACE} \
+  -k ${REPO_ROOT}/guides/${GUIDE_NAME}/modelserver/gpu/vllm-omni/base/
+```
+
+The vLLM-Omni server supports the `--omni` flag for multimodal model serving. The default configuration deploys [Qwen3-Omni](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct) with tensor parallelism of 2 across 4 replicas (8 GPUs total).
+
+For more information on vLLM-Omni capabilities, see the [vLLM-Omni documentation](https://vllm-omni.readthedocs.io/en/latest/).
 
 </details>
 
